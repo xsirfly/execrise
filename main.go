@@ -1,51 +1,23 @@
 package main
 
 import (
-	"github.com/docker/docker/client"
-	"context"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types"
-	"os"
-	"github.com/docker/docker/pkg/stdcopy"
-	"time"
-	"fmt"
+	"exercise/docker"
+	"exercise/handler/submission"
+	"github.com/gin-gonic/gin"
+	"log"
 )
 
 func main() {
-	ctx := context.Background()
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	err := docker.Init()
 	if err != nil {
-		panic(err)
-	}
-	cli.NegotiateAPIVersion(ctx)
-
-	resp, err := cli.ContainerCreate(context.Background(), &container.Config{
-		Image: "kylx:javademo",
-		Cmd: []string{"../runner", "-key", "java", "-expected", "hello world"},
-	}, nil, nil, "")
-	if err != nil {
-		panic(err)
+		log.Fatal(err)
+		return
 	}
 
-	startTime := time.Now()
-	if err := cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
-		panic(err)
-	}
+	r := gin.Default()
+	submission.RegisterRouter(r)
 
-	statusCh, errCh := cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		if err != nil {
-			panic(err)
-		}
-	case <-statusCh:
+	if err := r.Run(); err != nil {
+		log.Fatal(err)
 	}
-
-	out, err := cli.ContainerLogs(ctx, resp.ID, types.ContainerLogsOptions{ShowStdout: true})
-	if err != nil {
-		panic(err)
-	}
-
-	stdcopy.StdCopy(os.Stdout, os.Stderr, out)
-	fmt.Println(time.Now().Unix() - startTime.Unix())
 }

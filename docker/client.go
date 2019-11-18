@@ -11,7 +11,15 @@ func Init() error {
 	ctx := context.Background()
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	cli.NegotiateAPIVersion(ctx)
+	dockerCli = cli
+	return nil
 }
+
+func GetCli() *client.Client {
+	return dockerCli
+}
+
+
