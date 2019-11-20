@@ -18,11 +18,14 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"exercise/utils"
 )
 
 type submitReq struct {
 	Code string `json:"code"`
 }
+
+
 func Submit(c *gin.Context) {
 	var req submitReq
 	c.BindJSON(&req)
@@ -31,12 +34,12 @@ func Submit(c *gin.Context) {
 	base := filepath.Join("/Users/zhangcong/oj", submissionId.String())
 	path := filepath.Join(base, "Main.java")
 	if err := os.MkdirAll(base, os.ModePerm); err != nil {
-		abortRequesrtWithError(c, err)
+		utils.AbortRequesrtWithError(c, err)
 		return
 	}
 
 	if err := ioutil.WriteFile(path, []byte(req.Code), 0666); err != nil {
-		abortRequesrtWithError(c, err)
+		utils.AbortRequesrtWithError(c, err)
 		return
 	}
 	dockerCtx := context.Background()
@@ -54,13 +57,13 @@ func Submit(c *gin.Context) {
 		},
 	}, nil, "")
 	if err != nil {
-		abortRequesrtWithError(c, err)
+		utils.AbortRequesrtWithError(c, err)
 		return
 	}
 
 	startTime := time.Now()
 	if err := docker.GetCli().ContainerStart(dockerCtx, resp.ID, types.ContainerStartOptions{}); err != nil {
-		abortRequesrtWithError(c ,err)
+		utils.AbortRequesrtWithError(c ,err)
 		return
 	}
 
@@ -68,7 +71,7 @@ func Submit(c *gin.Context) {
 	select {
 	case err := <-errCh:
 		if err != nil {
-			abortRequesrtWithError(c, err)
+			utils.AbortRequesrtWithError(c, err)
 			return
 		}
 	case <-statusCh:
@@ -76,18 +79,18 @@ func Submit(c *gin.Context) {
 
 	out, err := docker.GetCli().ContainerLogs(dockerCtx, resp.ID, types.ContainerLogsOptions{ShowStdout: true})
 	if err != nil {
-		abortRequesrtWithError(c, err)
+		utils.AbortRequesrtWithError(c, err)
 		return
 	}
 	var result bytes.Buffer
 	if _, err := stdcopy.StdCopy(&result, &result, out); err != nil {
-		abortRequesrtWithError(c, err)
+		utils.AbortRequesrtWithError(c, err)
 		return
 	}
 
 	var r map[string]interface{}
 	if err := json.Unmarshal([]byte(trim(string(result.String()))), &r); err != nil {
-		abortRequesrtWithError(c, err)
+		utils.AbortRequesrtWithError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -95,12 +98,6 @@ func Submit(c *gin.Context) {
 		"result": r,
 	})
 	fmt.Println(time.Now().Unix() - startTime.Unix())
-}
-
-func abortRequesrtWithError(c *gin.Context, err error) {
-	c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
-		"message": err.Error(),
-	})
 }
 
 func trim(s string) string {

@@ -1,0 +1,9 @@
+port: 8080
+log:
+  level: debug
+  output: stdout
+database:
+  user: root
+  password: 3245985
+  dbname: execrise
+  host: 127.0.0.1
