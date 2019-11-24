@@ -3,7 +3,6 @@ package submission
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"exercise/docker"
 	"fmt"
 	"github.com/docker/docker/api/types"
@@ -16,9 +15,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 	"exercise/utils"
+	"exercise/command"
+	"errors"
+	"exercise/handler/submission/model"
+	"github.com/sirupsen/logrus"
 )
 
 type submitReq struct {
@@ -31,8 +33,18 @@ func Submit(c *gin.Context) {
 	c.BindJSON(&req)
 	submissionId := uuid.New()
 
-	base := filepath.Join("/Users/zhangcong/oj", submissionId.String())
-	path := filepath.Join(base, "Main.java")
+	logrus.Infof("receview submit %v", req)
+
+	command.Init(":chapter01")
+	runContext, _ := command.GetRunContextByProjectKey("gradleJava")
+	var cmd []string
+	cmd = append(cmd, runContext.RunCommand)
+	for _, arg := range runContext.RunArgs {
+		cmd = append(cmd, arg)
+	}
+
+	base := "/Users/xsir/ideaProjects/javademo/"
+	path := filepath.Join(base, "chapter01/src/main/java/Add.java")
 	if err := os.MkdirAll(base, os.ModePerm); err != nil {
 		utils.AbortRequesrtWithError(c, err)
 		return
@@ -44,8 +56,9 @@ func Submit(c *gin.Context) {
 	}
 	dockerCtx := context.Background()
 	resp, err := docker.GetCli().ContainerCreate(dockerCtx, &container.Config{
-		Image: "xsirfly/kylx:javademo",
-		Cmd: []string{"runner", "-key", "java", "-expected", "hello world"},
+		Image:      "kylx:gradle",
+		WorkingDir: "/usr/src/app",
+		Cmd:        cmd,
 	}, &container.HostConfig{
 		//AutoRemove: true,
 		Mounts: []mount.Mount{
@@ -53,6 +66,11 @@ func Submit(c *gin.Context) {
 				Type: mount.TypeBind,
 				Source: base,
 				Target: "/usr/src/app",
+			},
+			{
+				Type: mount.TypeBind,
+				Source: "/Users/xsir/.gradle",
+				Target: "/home/gradle/.gradle",
 			},
 		},
 	}, nil, "")
@@ -77,7 +95,7 @@ func Submit(c *gin.Context) {
 	case <-statusCh:
 	}
 
-	out, err := docker.GetCli().ContainerLogs(dockerCtx, resp.ID, types.ContainerLogsOptions{ShowStdout: true})
+	out, err := docker.GetCli().ContainerLogs(dockerCtx, resp.ID, types.ContainerLogsOptions{ShowStderr: true})
 	if err != nil {
 		utils.AbortRequesrtWithError(c, err)
 		return
@@ -88,20 +106,22 @@ func Submit(c *gin.Context) {
 		return
 	}
 
-	var r map[string]interface{}
-	if err := json.Unmarshal([]byte(trim(string(result.String()))), &r); err != nil {
+	if len(result.String()) > 0 {
+		utils.AbortRequesrtWithError(c, errors.New(result.String()))
+		return
+	}
+
+	var r Result
+	r.Success = true
+	var testSuite model.TestSuite
+	if err := testSuite.UnmarshalFromFile(filepath.Join(base, "chapter01/build/test-results/test/TEST-TestAdd.xml")); err != nil {
 		utils.AbortRequesrtWithError(c, err)
 		return
 	}
+	r.TestSuite = &testSuite
 	c.JSON(http.StatusOK, gin.H{
 		"submit_id": submissionId.String(),
 		"result": r,
 	})
 	fmt.Println(time.Now().Unix() - startTime.Unix())
-}
-
-func trim(s string) string {
-	i := strings.Index(s, "{")
-	n := s[i:]
-	return n
 }
