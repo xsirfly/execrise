@@ -1,8 +1,9 @@
 package conf
 
 import (
-	"gopkg.in/yaml.v2"
 	"io/ioutil"
+
+	"gopkg.in/yaml.v2"
 )
 
 type Config struct {
@@ -12,10 +13,16 @@ type Config struct {
 		Output string `yaml:"output"`
 	}
 	Database struct {
-		User string `yaml:"user"`
+		User     string `yaml:"user"`
 		Password string `yaml:"password"`
-		DBName string `yaml:"dbname"`
-		Host string `yaml:"host"`
+		DBName   string `yaml:"dbname"`
+		Host     string `yaml:"host"`
+	}
+	CodeBaseDir       string `yaml:"codeBaseDir"`
+	SubmissionBaseDir string `yaml:"submissionBaseDir"`
+	Redis             struct {
+		Addr     string `yaml:"addr"`
+		Password string `yaml:"password"`
 	}
 }
 

@@ -7,3 +7,7 @@ database:
   password: 3245985
   dbname: execrise
   host: 127.0.0.1
+redis:
+  addr: 127.0.0.1:6379
+codeBaseDir: "/Users/xsir/codes"
+submissionBaseDir: "/Users/xsir/submission"

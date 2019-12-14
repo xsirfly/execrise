@@ -1,8 +1,9 @@
 package docker
 
 import (
-	"github.com/docker/docker/client"
 	"context"
+
+	"github.com/docker/docker/client"
 )
 
 var dockerCli *client.Client
@@ -21,5 +22,3 @@ func Init() error {
 func GetCli() *client.Client {
 	return dockerCli
 }
-
-

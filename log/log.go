@@ -3,11 +3,12 @@ package log
 import (
 	"errors"
 	"exercise/conf"
-	"github.com/lestrrat/go-file-rotatelogs"
-	"github.com/sirupsen/logrus"
-	"github.com/rifflock/lfshook"
-	"time"
 	"os"
+	"time"
+
+	"github.com/rifflock/lfshook"
+	"github.com/sirupsen/logrus"
+	"github.com/lestrrat/go-file-rotatelogs"
 )
 
 func Init() error {
@@ -43,7 +44,7 @@ func Init() error {
 			logrus.ErrorLevel: writer,
 			logrus.FatalLevel: writer,
 			logrus.PanicLevel: writer,
-		},&logrus.TextFormatter{DisableColors: true})
+		}, &logrus.TextFormatter{DisableColors: true})
 		logrus.AddHook(lfHook)
 	}
 	return nil

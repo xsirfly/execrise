@@ -1,127 +1,165 @@
 package submission
 
 import (
-	"bytes"
 	"context"
+	"exercise/command"
+	"exercise/database"
 	"exercise/docker"
-	"fmt"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
+	"exercise/utils"
 	"io/ioutil"
 	"net/http"
 	"os"
-	"path/filepath"
-	"time"
-	"exercise/utils"
-	"exercise/command"
-	"errors"
-	"exercise/handler/submission/model"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
+	"github.com/docker/docker/pkg/stdcopy"
+	"fmt"
+	"time"
+	"exercise/cache"
+	"exercise/push"
 )
 
 type submitReq struct {
-	Code string `json:"code"`
+	CourseId  int64             `json:"course_id" uri:"course" binding:"required"`
+	ChapterId int64             `json:"chapter_id" uri:"course" binding:"required"`
+	Code      map[string]string `json:"code" form:"code" binding:"required"`
+	ConnId    string            `json:"connId" binding:"required"`
 }
 
+const (
+	SubmitStatusSuccess = "success"
+	SubmitStatusFailed = "failed"
+)
 
-func Submit(c *gin.Context) {
-	var req submitReq
-	c.BindJSON(&req)
+type RunLogOut struct {
+	Conn *push.Connection
+}
+
+func (c *RunLogOut) Write(p []byte) (n int, err error) {
+	buf := make([]byte, len(p))
+	c.Conn.SendMessage(push.CmdRunLog, string(buf))
+	return len(p), nil
+}
+
+func Submit(req *submitReq) (code int, response interface{}){
 	submissionId := uuid.New()
-
+	userID := int64(1)
 	logrus.Infof("receview submit %v", req)
 
-	command.Init(":chapter01")
-	runContext, _ := command.GetRunContextByProjectKey("gradleJava")
-	var cmd []string
-	cmd = append(cmd, runContext.RunCommand)
-	for _, arg := range runContext.RunArgs {
-		cmd = append(cmd, arg)
+	var (
+		course         *database.Course
+		chapter        *database.Chapter
+		commandContext command.Context
+		err            error
+		ok             bool
+	)
+
+	if course, err = database.GetCourse(req.CourseId); err != nil {
+		return utils.ErrorResp(err)
 	}
 
-	base := "/Users/xsir/ideaProjects/javademo/"
-	path := filepath.Join(base, "chapter01/src/main/java/Add.java")
-	if err := os.MkdirAll(base, os.ModePerm); err != nil {
-		utils.AbortRequesrtWithError(c, err)
-		return
+	if chapter, err = database.GetChapter(req.ChapterId); err != nil {
+		return utils.ErrorResp(err)
 	}
 
-	if err := ioutil.WriteFile(path, []byte(req.Code), 0666); err != nil {
-		utils.AbortRequesrtWithError(c, err)
-		return
+	if commandContext, ok = command.GetRunContextByBuild(course.BuildTool); !ok {
+		return utils.ErrorResp(err)
 	}
+
+	codeDir := utils.GetCodeDir(course)
+	submissionDir := utils.GetSubmissionDir(userID, course)
+
+	exists, err := utils.PathExists(submissionDir)
+	if err != nil {
+		return utils.ErrorResp(err)
+	}
+	if !exists {
+		if err := os.MkdirAll(submissionDir, os.ModePerm); err != nil {
+			return utils.ErrorResp(err)
+		}
+		if err := utils.CopyDir(codeDir, submissionDir); err != nil {
+			return utils.ErrorResp(err)
+		}
+	}
+
+	for file, code := range req.Code {
+		if err := ioutil.WriteFile(file, []byte(code), 0666); err != nil {
+			return utils.ErrorResp(err)
+		}
+	}
+
 	dockerCtx := context.Background()
 	resp, err := docker.GetCli().ContainerCreate(dockerCtx, &container.Config{
-		Image:      "kylx:gradle",
-		WorkingDir: "/usr/src/app",
-		Cmd:        cmd,
+		Image:      commandContext.GetImage(),
+		WorkingDir: commandContext.GetWorkDir(),
+		Cmd:        commandContext.GenCmd(chapter),
 	}, &container.HostConfig{
-		//AutoRemove: true,
-		Mounts: []mount.Mount{
-			{
-				Type: mount.TypeBind,
-				Source: base,
-				Target: "/usr/src/app",
-			},
-			{
-				Type: mount.TypeBind,
-				Source: "/Users/xsir/.gradle",
-				Target: "/home/gradle/.gradle",
-			},
-		},
+		Mounts: commandContext.GenMounts(submissionDir),
 	}, nil, "")
 	if err != nil {
-		utils.AbortRequesrtWithError(c, err)
-		return
+		return utils.ErrorResp(err)
 	}
 
-	startTime := time.Now()
 	if err := docker.GetCli().ContainerStart(dockerCtx, resp.ID, types.ContainerStartOptions{}); err != nil {
-		utils.AbortRequesrtWithError(c ,err)
-		return
+		return utils.ErrorResp(err)
 	}
 
-	statusCh, errCh := docker.GetCli().ContainerWait(dockerCtx, resp.ID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errCh:
-		if err != nil {
-			utils.AbortRequesrtWithError(c, err)
+	out, err := docker.GetCli().ContainerLogs(dockerCtx, resp.ID, types.ContainerLogsOptions{
+		ShowStderr: true,
+		ShowStdout: true,
+		Follow:     true,
+		Tail:       "all",
+		Details:    true,
+	})
+	if err != nil {
+		return utils.ErrorResp(err)
+	}
+
+	go func() {
+		wsconn, ok := push.GetPushClient(req.ConnId)
+		if !ok {
+			logrus.WithField("connId", req.ConnId).Error("ws connection not found")
 			return
 		}
-	case <-statusCh:
-	}
+		logOut := &RunLogOut{
+			Conn: wsconn,
+		}
+		stdcopy.StdCopy(logOut, logOut, out)
+	}()
 
-	out, err := docker.GetCli().ContainerLogs(dockerCtx, resp.ID, types.ContainerLogsOptions{ShowStderr: true})
-	if err != nil {
-		utils.AbortRequesrtWithError(c, err)
-		return
-	}
-	var result bytes.Buffer
-	if _, err := stdcopy.StdCopy(&result, &result, out); err != nil {
-		utils.AbortRequesrtWithError(c, err)
-		return
-	}
-
-	if len(result.String()) > 0 {
-		utils.AbortRequesrtWithError(c, errors.New(result.String()))
-		return
-	}
+	go func() {
+		statusCh, errCh := docker.GetCli().ContainerWait(dockerCtx, resp.ID, container.WaitConditionNotRunning)
+		select {
+		case err := <-errCh:
+			if err != nil {
+				logrus.WithError(err).Error("container wait failed")
+				cache.Client.RPush(genSubmitStatusToken(submissionId.String()), SubmitStatusFailed)
+			}
+		case <-statusCh:
+			cache.Client.RPush(genSubmitStatusToken(submissionId.String()), SubmitStatusSuccess)
+		}
+	}()
 
 	var r Result
 	r.Success = true
-	var testSuite model.TestSuite
-	if err := testSuite.UnmarshalFromFile(filepath.Join(base, "chapter01/build/test-results/test/TEST-TestAdd.xml")); err != nil {
-		utils.AbortRequesrtWithError(c, err)
-		return
-	}
-	r.TestSuite = &testSuite
-	c.JSON(http.StatusOK, gin.H{
+	return http.StatusOK, gin.H{
 		"submit_id": submissionId.String(),
-		"result": r,
+	}
+}
+
+func GetSubmitStatus(token string) (code int, resp interface{}) {
+	res, err := cache.Client.BLPop(30 * time.Second, genSubmitStatusToken(token)).Result()
+	if err != nil {
+		logrus.Error(err)
+		return utils.ErrorResp(err)
+	}
+	return utils.SuccessResp(gin.H{
+		"status": res[1],
 	})
-	fmt.Println(time.Now().Unix() - startTime.Unix())
+}
+
+func genSubmitStatusToken(submitId string) string {
+	return fmt.Sprintf("submit_status:%s", submitId)
 }
