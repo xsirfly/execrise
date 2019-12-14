@@ -16,7 +16,6 @@ func Init() error {
 		return errors.New("config has not init")
 	}
 	logConf := conf.GetConf().Log
-	logrus.SetFormatter(&logrus.JSONFormatter{})
 	logrus.SetReportCaller(true)
 	level, err := logrus.ParseLevel(logConf.Level)
 	if err != nil {

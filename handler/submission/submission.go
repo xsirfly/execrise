@@ -129,18 +129,14 @@ func Submit(req *submitReq) (code int, response interface{}){
 		stdcopy.StdCopy(logOut, logOut, out)
 	}()
 
-	go func() {
-		statusCh, errCh := docker.GetCli().ContainerWait(dockerCtx, resp.ID, container.WaitConditionNotRunning)
-		select {
-		case err := <-errCh:
-			if err != nil {
-				logrus.WithError(err).Error("container wait failed")
-				cache.Client.RPush(genSubmitStatusToken(submissionId.String()), SubmitStatusFailed)
-			}
-		case <-statusCh:
-			cache.Client.RPush(genSubmitStatusToken(submissionId.String()), SubmitStatusSuccess)
+	statusCh, errCh := docker.GetCli().ContainerWait(dockerCtx, resp.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			logrus.WithError(err).Error("container wait failed")
 		}
-	}()
+	case <-statusCh:
+	}
 
 	var r Result
 	r.Success = true
